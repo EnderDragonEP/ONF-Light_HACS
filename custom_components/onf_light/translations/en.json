@@ -1,0 +1,22 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "ONF Light",
+                "description": "Select your ONF Light device",
+                "data": {
+                    "address": "Device"
+                }
+            },
+            "confirm": {
+                "title": "Confirm",
+                "description": "Do you want to set up {name}?"
+            }
+        },
+        "abort": {
+            "already_configured": "Device is already configured",
+            "no_devices_found": "No ONF Light devices found. Make sure your light is powered on and in Bluetooth range.",
+            "not_supported": "This device is not supported"
+        }
+    }
+}

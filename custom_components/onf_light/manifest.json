@@ -1,0 +1,15 @@
+{
+  "domain": "onf_light",
+  "name": "ONF Light",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["bluetooth_adapters"],
+  "documentation": "https://github.com/your-repo/onf_light",
+  "bluetooth": [
+    { "local_name": "ONF*" },
+    { "local_name": "FLAT NANO+*" },
+    { "local_name": "MIST O+*" }
+  ],
+  "iot_class": "local_polling",
+  "version": "1.0.0"
+}

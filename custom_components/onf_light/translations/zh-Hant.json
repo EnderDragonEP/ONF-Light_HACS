@@ -1,0 +1,22 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "ONF Light",
+                "description": "選擇您的 ONF Light 裝置",
+                "data": {
+                    "address": "裝置"
+                }
+            },
+            "confirm": {
+                "title": "確認",
+                "description": "您要設置 {name} 嗎？"
+            }
+        },
+        "abort": {
+            "already_configured": "裝置已經配置",
+            "no_devices_found": "未找到 ONF Light 裝置。請確保您的燈已開啟並在藍牙範圍內。",
+            "not_supported": "此裝置不受支持"
+        }
+    }
+}
