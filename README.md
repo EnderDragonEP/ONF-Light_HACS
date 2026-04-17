@@ -1,9 +1,10 @@
-
 # ONF Light — Home Assistant Integration
+
+[English](README.md) | [中文](README_zh.md)
 
 ![logo](custom_components/onf_light/brand/dark_logo.png)
 
-Custom integration to control ONF Bluetooth lights (reverse-engineered from the official Android app). Provides brightness and CCT control for supported ONF models via Bluetooth Low Energy (Nordic UART).
+Custom integration to control ONF Bluetooth plant lights (reverse-engineered from the official Android app). Provides brightness and CCT control for supported ONF models via Bluetooth Low Energy (Nordic UART).
 
 This project implements the same protocol and device-specific behavior observed in the official ONF app, including model-aware CCT ranges, debounce & optimistic updates, and a hybrid BLE connection strategy for reliable control.
 
@@ -63,3 +64,4 @@ Notes:
 ## Credits
 
 - Reverse engineering based on decompiled ONF Android app resources using JADX.
+- Claude Opus 4.6, GPT-5.3-Codex is used for AI accelerated development.
