@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-![logo](custom_components\onf_light\brand\dark_logo.png)
+![logo](custom_components/onf_light/brand/dark_logo.png)
 
 這是用於控制 ONF 藍牙植物燈的 Home Assistant 整合（由官方 Android 應用反向工程得來）。提供對受支援 ONF 型號的亮度與色溫（CCT）控制，透過藍牙低功耗（Nordic UART）協定直接與裝置通訊。
 
