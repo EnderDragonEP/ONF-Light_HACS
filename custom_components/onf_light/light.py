@@ -6,6 +6,7 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_TEMP_KELVIN,
@@ -16,19 +17,29 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import (
+    AddEntitiesCallback,
+    async_get_current_platform,
+)
 from homeassistant.helpers.event import async_track_time_interval
 
-from .ble_client import ONFLightBLEClient
 from .const import (
     BRIGHTNESS_STEP_PERCENT,
     COMMAND_DEBOUNCE_SECONDS,
     CONF_DEVICE_TYPE,
+    CONF_IDLE_DISCONNECT,
     CONF_MODEL,
+    CONF_POLL_INTERVAL,
+    CONF_TIME_SYNC_INTERVAL,
+    CONF_TIMERS,
     DOMAIN,
+    IDLE_DISCONNECT_SECONDS,
+    MAX_TIMERS,
     STATE_CONFIRM_RETRIES,
     STATE_CONFIRM_RETRY_DELAY,
     STATE_READBACK_DELAY,
+    TIME_SYNC_INTERVAL_MINUTES,
+    UNAVAILABLE_POLL_DIVISOR,
     UNAVAILABLE_TRACK_FAILURES,
     UPDATE_INTERVAL_SECONDS,
     is_brightness_only,
@@ -38,6 +49,26 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# ── Service schemas ──────────────────────────────────────────────────────────
+
+SET_TIMER_SCHEMA = vol.Schema(
+    {
+        vol.Required("slot"): vol.All(int, vol.Range(min=1, max=MAX_TIMERS)),
+        vol.Required("start_time"): str,
+        vol.Required("end_time"): str,
+        vol.Required("brightness"): vol.All(int, vol.Range(min=0, max=100)),
+        vol.Optional("color_temp_kelvin"): vol.All(int, vol.Range(min=2700, max=7000)),
+    }
+)
+
+CLEAR_TIMER_SCHEMA = vol.Schema(
+    {
+        vol.Optional("slot"): vol.All(int, vol.Range(min=1, max=MAX_TIMERS)),
+    }
+)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _normalize_brightness_pct(brightness_pct: int) -> int:
     """Normalize brightness to the app's 5 percent steps."""
@@ -65,17 +96,89 @@ def _normalize_cct_internal(cct_internal: int) -> int:
     return round(cct_internal / BRIGHTNESS_STEP_PERCENT) * BRIGHTNESS_STEP_PERCENT
 
 
+def _parse_time(time_str: str) -> tuple[int, int]:
+    """Parse 'HH:MM' or 'HH:MM:SS' to (hour, minute)."""
+    parts = time_str.split(":")
+    return int(parts[0]), int(parts[1])
+
+
+def _normalize_timer_list(raw: list[dict]) -> list[dict]:
+    """Return a MAX_TIMERS-long list, padding with inactive slots as needed."""
+    result = list(raw[:MAX_TIMERS])
+    while len(result) < MAX_TIMERS:
+        result.append({"active": False})
+    return result
+
+
+def _compute_simple_timer_durations(
+    timers: list[dict],
+) -> tuple[int, int, list[int]]:
+    """Compute start time and chained durations for the A1 simple-timer protocol.
+
+    Port of BLEManager.saveTimerTime() from the official Android app.
+    Returns (start_hour, start_minute, [dur1_min, ..., dur5_min]).
+    Durations are chained: dur[0] = timer-0 length, dur[N] = gap between
+    end of timer N-1 and end of timer N (handles midnight wrap).
+    """
+    MINS_PER_DAY = 1440
+
+    def hm_total(t: dict, h_key: str, m_key: str) -> int:
+        return t.get(h_key, 0) * 60 + t.get(m_key, 0)
+
+    if not timers or not timers[0].get("active"):
+        return (0, 0, [0] * MAX_TIMERS)
+
+    t0 = timers[0]
+    start_h = t0.get("start_hour", 0)
+    start_m = t0.get("start_minute", 0)
+    start_total = start_h * 60 + start_m
+    end0_raw = hm_total(t0, "end_hour", "end_minute")
+
+    # Handle midnight wrap for timer-0 (Java: `after = start.after(end)`)
+    crosses_midnight = start_total > end0_raw
+    end0_adj = end0_raw + (MINS_PER_DAY if crosses_midnight else 0)
+    dur0 = end0_adj - start_total
+
+    durations: list[int] = [dur0]
+    prev_adj = end0_adj
+    carry = 1 if crosses_midnight else 0
+
+    for i in range(1, MAX_TIMERS):
+        if i < len(timers) and timers[i].get("active"):
+            ti = timers[i]
+            cur_raw = hm_total(ti, "end_hour", "end_minute")
+            # Java: if (time2.after(calendar3.getTime())) carry++
+            if prev_adj > cur_raw + carry * MINS_PER_DAY:
+                carry += 1
+            cur_adj = cur_raw + carry * MINS_PER_DAY
+            gap = cur_adj - prev_adj
+            prev_adj = cur_adj
+        else:
+            gap = 0
+        durations.append(gap)
+
+    return (start_h, start_m, durations)
+
+
+# ── Platform setup ────────────────────────────────────────────────────────────
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up ONF Light from a config entry."""
-    address = entry.data[CONF_ADDRESS]
-    client = ONFLightBLEClient(hass, address)
+    client = hass.data[DOMAIN][entry.entry_id]["client"]
     entity = ONFLightEntity(entry, client)
+    hass.data[DOMAIN][entry.entry_id]["entity"] = entity
     async_add_entities([entity])
 
+    platform = async_get_current_platform()
+    platform.async_register_entity_service("set_timer", SET_TIMER_SCHEMA, "async_set_timer")
+    platform.async_register_entity_service("clear_timer", CLEAR_TIMER_SCHEMA, "async_clear_timer")
+
+
+# ── Entity ───────────────────────────────────────────────────────────────────
 
 class ONFLightEntity(LightEntity):
     """Representation of an ONF Light."""
@@ -101,13 +204,19 @@ class ONFLightEntity(LightEntity):
         self._available: bool = True
         self._last_brightness: int = 128
         self._consecutive_failures: int = 0
+        self._poll_skip_counter: int = 0
         self._debounce_task: asyncio.Task | None = None
         self._confirm_task: asyncio.Task | None = None
         self._unsub_interval: CALLBACK_TYPE | None = None
+        self._unsub_sync_interval: CALLBACK_TYPE | None = None
         self._pending_brightness_pct: int | None = None
         self._pending_cct_internal: int | None = None
         self._expected_brightness_pct: int | None = None
         self._expected_cct_internal: int | None = None
+        self._firmware_version: str | None = None
+        self._firmware_fetched: bool = False
+        self._time_synced: bool = False
+        self._timers_pushed: bool = False
         if self._brightness_only:
             self._attr_color_mode = ColorMode.BRIGHTNESS
             self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
@@ -137,16 +246,62 @@ class ONFLightEntity(LightEntity):
 
     async def async_added_to_hass(self) -> None:
         """Run when entity is added to hass."""
-        self._unsub_interval = async_track_time_interval(
-            self.hass,
-            self._async_poll_state,
-            timedelta(seconds=UPDATE_INTERVAL_SECONDS),
+        self._restart_poll_timer()
+        self._restart_sync_timer()
+        self.async_on_remove(
+            self._entry.add_update_listener(self._async_options_updated)
         )
+
+    def _restart_poll_timer(self) -> None:
+        """Start or restart the polling timer from the current configured interval."""
+        if self._unsub_interval is not None:
+            self._unsub_interval()
+            self._unsub_interval = None
+        interval = self._entry.options.get(CONF_POLL_INTERVAL, UPDATE_INTERVAL_SECONDS)
+        if interval > 0:
+            self._unsub_interval = async_track_time_interval(
+                self.hass,
+                self._async_poll_state,
+                timedelta(seconds=interval),
+            )
+
+    def _restart_sync_timer(self) -> None:
+        """Start or restart the periodic clock-sync timer from the current configured interval."""
+        if self._unsub_sync_interval is not None:
+            self._unsub_sync_interval()
+            self._unsub_sync_interval = None
+        interval_minutes = self._entry.options.get(
+            CONF_TIME_SYNC_INTERVAL, TIME_SYNC_INTERVAL_MINUTES
+        )
+        if interval_minutes > 0:
+            self._unsub_sync_interval = async_track_time_interval(
+                self.hass,
+                self._async_periodic_time_sync,
+                timedelta(minutes=interval_minutes),
+            )
+
+    async def _async_periodic_time_sync(self, _now=None) -> None:
+        """Sync the device RTC on the configured schedule."""
+        success = await self._client.sync_time()
+        _LOGGER.debug(
+            "Periodic time sync for %s: %s", self._address, "ok" if success else "failed"
+        )
+
+    async def _async_options_updated(
+        self, hass: HomeAssistant, entry: ConfigEntry
+    ) -> None:
+        """Apply updated options: poll interval, idle-disconnect timeout, sync interval."""
+        self._restart_poll_timer()
+        self._restart_sync_timer()
+        idle_seconds = float(entry.options.get(CONF_IDLE_DISCONNECT, IDLE_DISCONNECT_SECONDS))
+        self._client.set_idle_disconnect_seconds(idle_seconds)
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up on removal."""
         if self._unsub_interval is not None:
             self._unsub_interval()
+        if self._unsub_sync_interval is not None:
+            self._unsub_sync_interval()
         self._cancel_task("_debounce_task")
         self._cancel_task("_confirm_task")
         await self._client.disconnect()
@@ -177,6 +332,7 @@ class ONFLightEntity(LightEntity):
         """Mark entity available and reset connectivity failures."""
         self._available = True
         self._consecutive_failures = 0
+        self._poll_skip_counter = 0
 
     def _register_failure(self, mark_unavailable: bool = True) -> None:
         """Track a failed device operation and mark unavailable if needed."""
@@ -223,9 +379,13 @@ class ONFLightEntity(LightEntity):
         self.async_write_ha_state()
 
     async def _async_poll_state(self, _now=None) -> None:
-        """Poll the device state periodically."""
+        """Poll the device state periodically, backing off when unavailable."""
         if self._has_pending_operation:
             return
+        if not self._available:
+            self._poll_skip_counter += 1
+            if self._poll_skip_counter % UNAVAILABLE_POLL_DIVISOR != 0:
+                return
         await self._sync_state_from_device(mark_unavailable=True)
 
     async def _fetch_state_from_device(self) -> tuple[int, int | None] | None:
@@ -243,7 +403,7 @@ class ONFLightEntity(LightEntity):
         return (_normalize_brightness_pct(brightness_pct), _normalize_cct_internal(cct_internal))
 
     def _apply_device_state(self, brightness_pct: int, cct_internal: int | None) -> None:
-        """Apply a fetched device state to the entity."""
+        """Apply a fetched device state to the entity and trigger one-shot tasks."""
         self._is_on = brightness_pct > 0
         self._brightness = _brightness_pct_to_ha(brightness_pct)
         if self._is_on:
@@ -251,6 +411,69 @@ class ONFLightEntity(LightEntity):
         if cct_internal is not None:
             self._cct_internal = cct_internal
         self._mark_available()
+
+        if not self._firmware_fetched:
+            self._firmware_fetched = True
+            asyncio.create_task(self._fetch_firmware_version())
+
+        if not self._time_synced:
+            self._time_synced = True
+            asyncio.create_task(self._sync_device_time())
+
+        if not self._timers_pushed:
+            self._timers_pushed = True
+            asyncio.create_task(self._push_stored_timers())
+
+    async def _fetch_firmware_version(self) -> None:
+        """Fetch firmware version once and publish to diagnostics store and coordinator."""
+        version = await self._client.get_firmware_version()
+        if version:
+            self._firmware_version = version
+            _LOGGER.debug("Firmware version for %s: %s", self._address, version)
+            entry_store = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+            entry_store.setdefault("diagnostics", {})["firmware_version"] = version
+            coordinator = entry_store.get("coordinator")
+            if coordinator is not None:
+                await coordinator.async_request_refresh()
+            self.async_write_ha_state()
+
+    async def _sync_device_time(self) -> None:
+        """Sync the device RTC to current local time."""
+        success = await self._client.sync_time()
+        _LOGGER.debug("Time sync for %s: %s", self._address, "ok" if success else "failed")
+
+    async def _push_stored_timers(self) -> None:
+        """Push timer configuration stored in options to the device on startup."""
+        timers_raw = self._entry.options.get(CONF_TIMERS, [])
+        if not timers_raw or not any(t.get("active") for t in timers_raw):
+            return
+        timers = _normalize_timer_list(timers_raw)
+        _LOGGER.debug("Pushing stored timers to %s", self._address)
+        await self.async_send_timers_to_device(timers)
+
+    async def async_send_timers_to_device(self, timers: list[dict]) -> None:
+        """Send full timer configuration to the device."""
+        if self._brightness_only:
+            start_h, start_m, durations = _compute_simple_timer_durations(timers)
+            await self._client.set_timers_simple_time(start_h, start_m, durations)
+            br_values = [t.get("brightness", 0) for t in timers]
+            await self._client.set_timers_simple_brightness(br_values)
+        else:
+            for i, timer in enumerate(timers, start=1):
+                if timer.get("active"):
+                    sh, sm = _parse_time(timer.get("start", "00:00"))
+                    eh, em = _parse_time(timer.get("end", "00:00"))
+                    await self._client.set_timer_cct_time(i, sh, sm, eh, em)
+                else:
+                    await self._client.clear_timer_cct_time(i)
+            cct_values = [t.get("cct_internal", 0) for t in timers]
+            br_values = [t.get("brightness", 0) for t in timers]
+            await self._client.set_timers_cct_brightness(cct_values, br_values)
+
+    async def _update_timer_options(self, timers: list[dict]) -> None:
+        """Persist timer state to config entry options."""
+        new_options = {**self._entry.options, CONF_TIMERS: timers}
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
     def _matches_expected_state(
         self, brightness_pct: int, cct_internal: int | None
@@ -307,6 +530,8 @@ class ONFLightEntity(LightEntity):
         self._register_failure(mark_unavailable=mark_unavailable)
         self.async_write_ha_state()
 
+    # ── HA properties ────────────────────────────────────────────────────────
+
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info."""
@@ -338,6 +563,66 @@ class ONFLightEntity(LightEntity):
     def available(self) -> bool:
         """Return True if entity is available."""
         return self._available
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return diagnostic and timer attributes."""
+        attrs: dict[str, Any] = {}
+        if self._firmware_version:
+            attrs["firmware_version"] = self._firmware_version
+        timers = self._entry.options.get(CONF_TIMERS, [])
+        if timers:
+            attrs["timers"] = timers
+        return attrs
+
+    # ── Service calls ────────────────────────────────────────────────────────
+
+    async def async_set_timer(
+        self,
+        slot: int,
+        start_time: str,
+        end_time: str,
+        brightness: int,
+        color_temp_kelvin: int | None = None,
+    ) -> None:
+        """Set a timer slot and push the full schedule to the device."""
+        idx = slot - 1
+        sh, sm = _parse_time(start_time)
+        eh, em = _parse_time(end_time)
+
+        new_timer: dict[str, Any] = {
+            "active": True,
+            "start": f"{sh:02d}:{sm:02d}",
+            "end": f"{eh:02d}:{em:02d}",
+            "start_hour": sh,
+            "start_minute": sm,
+            "end_hour": eh,
+            "end_minute": em,
+            "brightness": max(0, min(100, brightness)),
+        }
+        if not self._brightness_only and color_temp_kelvin is not None:
+            k = max(self._min_kelvin, min(self._max_kelvin, color_temp_kelvin))
+            new_timer["color_temp_kelvin"] = k
+            new_timer["cct_internal"] = self._kelvin_to_internal(k)
+
+        timers = _normalize_timer_list(self._entry.options.get(CONF_TIMERS, []))
+        timers[idx] = new_timer
+        await self._update_timer_options(timers)
+        await self.async_send_timers_to_device(timers)
+        self.async_write_ha_state()
+
+    async def async_clear_timer(self, slot: int | None = None) -> None:
+        """Clear one or all timer slots and push the updated schedule."""
+        timers = _normalize_timer_list(self._entry.options.get(CONF_TIMERS, []))
+        if slot is None:
+            timers = [{"active": False}] * MAX_TIMERS
+        else:
+            timers[slot - 1] = {"active": False}
+        await self._update_timer_options(timers)
+        await self.async_send_timers_to_device(timers)
+        self.async_write_ha_state()
+
+    # ── Light commands ───────────────────────────────────────────────────────
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on."""
@@ -381,7 +666,11 @@ class ONFLightEntity(LightEntity):
             self._debounce_task = None
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the light off."""
+        """Turn the light off.
+
+        CCT devices receive lx=000,CCC (matching setDimmerB in the official app).
+        Brightness-only devices receive lv=000.
+        """
         self._is_on = False
         self._brightness = 0
         self._expected_brightness_pct = 0
@@ -392,7 +681,11 @@ class ONFLightEntity(LightEntity):
         self._cancel_task("_confirm_task")
         self._clear_pending_command()
 
-        success = await self._client.set_brightness(0)
+        if self._brightness_only:
+            success = await self._client.set_brightness(0)
+        else:
+            success = await self._client.set_brightness_cct(0, self._cct_internal)
+
         if success:
             self._mark_available()
             await asyncio.sleep(STATE_READBACK_DELAY)
@@ -404,5 +697,3 @@ class ONFLightEntity(LightEntity):
     async def async_update(self) -> None:
         """Fetch state from the device when first added."""
         await self._async_poll_state()
-
-

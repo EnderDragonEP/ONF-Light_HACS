@@ -1,0 +1,65 @@
+set_timer:
+  name: Set Timer
+  description: Set a scheduled timer slot on an ONF Light device. The device executes the schedule autonomously using its internal clock.
+  target:
+    entity:
+      domain: light
+      integration: onf_light
+  fields:
+    slot:
+      name: Slot
+      description: Timer slot number (1–5).
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 5
+          mode: box
+    start_time:
+      name: Start Time
+      description: Time when the light turns on to the scheduled brightness.
+      required: true
+      selector:
+        time:
+    end_time:
+      name: End Time
+      description: Time when the scheduled period ends.
+      required: true
+      selector:
+        time:
+    brightness:
+      name: Brightness
+      description: Brightness percentage for this scheduled period (0–100).
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    color_temp_kelvin:
+      name: Color Temperature
+      description: Color temperature in Kelvin for this period. Only applies to tunable-white devices; ignored for brightness-only models.
+      required: false
+      selector:
+        number:
+          min: 2700
+          max: 7000
+          unit_of_measurement: K
+
+clear_timer:
+  name: Clear Timer
+  description: Clear one or all scheduled timer slots on an ONF Light device.
+  target:
+    entity:
+      domain: light
+      integration: onf_light
+  fields:
+    slot:
+      name: Slot
+      description: Timer slot to clear (1–5). Omit to clear all slots.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 5
+          mode: box

@@ -18,5 +18,137 @@
             "no_devices_found": "未找到 ONF Light 裝置。請確保您的燈已開啟並在藍牙範圍內。",
             "not_supported": "此裝置不受支持"
         }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "裝置設定",
+                "description": "調整連線設定，並設定最多 5 個自動照明排程。排程儲存於裝置內部並由裝置內部時鐘執行。在排程運行期間不需要保持藍牙連線。",
+                "data": {
+                    "poll_interval": "狀態輪詢間隔(秒)",
+                    "idle_disconnect": "藍牙閒置斷線(秒)",
+                    "time_sync_interval": "時鐘同步間隔(分)",
+                    "slot_1_enabled": "定時器槽位 1",
+                    "slot_1_start": "開啟時間",
+                    "slot_1_end": "關閉時間",
+                    "slot_1_brightness": "亮度",
+                    "slot_1_color_temp": "色溫",
+                    "slot_2_enabled": "定時器槽位 2",
+                    "slot_2_start": "開啟時間",
+                    "slot_2_end": "關閉時間",
+                    "slot_2_brightness": "亮度",
+                    "slot_2_color_temp": "色溫",
+                    "slot_3_enabled": "定時器槽位 3",
+                    "slot_3_start": "開啟時間",
+                    "slot_3_end": "關閉時間",
+                    "slot_3_brightness": "亮度",
+                    "slot_3_color_temp": "色溫",
+                    "slot_4_enabled": "定時器槽位 4",
+                    "slot_4_start": "開啟時間",
+                    "slot_4_end": "關閉時間",
+                    "slot_4_brightness": "亮度",
+                    "slot_4_color_temp": "色溫",
+                    "slot_5_enabled": "定時器槽位 5",
+                    "slot_5_start": "開啟時間",
+                    "slot_5_end": "關閉時間",
+                    "slot_5_brightness": "亮度",
+                    "slot_5_color_temp": "色溫"
+                },
+                "data_description": {
+                    "poll_interval": "HA 在背景讀取裝置狀態的間隔（秒）。設為 0 可停用輪詢。",
+                    "idle_disconnect": "HA 在閒置指定秒數後自動斷開藍牙連線。設為 0 可在每次命令後立即斷線，設為 -1 可保持永久連線。",
+                    "time_sync_interval": "自動同步裝置時鐘的間隔（分鐘）。設為 0 可停用。預設值為 1440（24 小時）。",
+                    "slot_1_enabled": "啟用此定時器槽位。排程將推送至裝置，由裝置內部時鐘執行",
+                    "slot_1_start": "燈光在此時間開啟，並調整至排程亮度。",
+                    "slot_1_end": "排程時段結束，燈光在此時間關閉。",
+                    "slot_1_brightness": "排程時段的亮度（0 = 關閉，100 = 最亮）。",
+                    "slot_1_color_temp": "排程時段的色溫（克耳文）。僅適用於可調色溫裝置，亮度型裝置將忽略此設定。",
+                    "slot_2_enabled": "啟用此定時器槽位。排程將推送至裝置，由裝置內部時鐘執行",
+                    "slot_2_start": "燈光在此時間開啟，並調整至排程亮度。",
+                    "slot_2_end": "排程時段結束，燈光在此時間關閉。",
+                    "slot_2_brightness": "排程時段的亮度（0 = 關閉，100 = 最亮）。",
+                    "slot_2_color_temp": "排程時段的色溫（克耳文）。僅適用於可調色溫裝置，亮度型裝置將忽略此設定。",
+                    "slot_3_enabled": "啟用此定時器槽位。排程將推送至裝置，由裝置內部時鐘執行",
+                    "slot_3_start": "燈光在此時間開啟，並調整至排程亮度。",
+                    "slot_3_end": "排程時段結束，燈光在此時間關閉。",
+                    "slot_3_brightness": "排程時段的亮度（0 = 關閉，100 = 最亮）。",
+                    "slot_3_color_temp": "排程時段的色溫（克耳文）。僅適用於可調色溫裝置，亮度型裝置將忽略此設定。",
+                    "slot_4_enabled": "啟用此定時器槽位。排程將推送至裝置，由裝置內部時鐘執行",
+                    "slot_4_start": "燈光在此時間開啟，並調整至排程亮度。",
+                    "slot_4_end": "排程時段結束，燈光在此時間關閉。",
+                    "slot_4_brightness": "排程時段的亮度（0 = 關閉，100 = 最亮）。",
+                    "slot_4_color_temp": "排程時段的色溫（克耳文）。僅適用於可調色溫裝置，亮度型裝置將忽略此設定。",
+                    "slot_5_enabled": "啟用此定時器槽位。排程將推送至裝置，由裝置內部時鐘執行",
+                    "slot_5_start": "燈光在此時間開啟，並調整至排程亮度。",
+                    "slot_5_end": "排程時段結束，燈光在此時間關閉。",
+                    "slot_5_brightness": "排程時段的亮度（0 = 關閉，100 = 最亮）。",
+                    "slot_5_color_temp": "排程時段的色溫（克耳文）。僅適用於可調色溫裝置，亮度型裝置將忽略此設定。"
+                }
+            }
+        }
+    },
+    "entity": {
+        "button": {
+            "sync_time": {
+                "name": "同步裝置時鐘"
+            }
+        },
+        "binary_sensor": {
+            "connected": {
+                "name": "藍牙連線狀態"
+            }
+        },
+        "sensor": {
+            "firmware_version": {
+                "name": "韌體版本"
+            },
+            "signal_strength": {
+                "name": "訊號強度"
+            },
+            "kelvin_range": {
+                "name": "色溫範圍"
+            },
+            "active_timers": {
+                "name": "已啟用定時器"
+            }
+        }
+    },
+    "services": {
+        "set_timer": {
+            "name": "設定定時器",
+            "description": "為 ONF Light 裝置設定一個排程定時器槽位。",
+            "fields": {
+                "slot": {
+                    "name": "槽位",
+                    "description": "定時器槽位編號（1–5）。"
+                },
+                "start_time": {
+                    "name": "開始時間",
+                    "description": "燈光以排程亮度開啟的時間。"
+                },
+                "end_time": {
+                    "name": "結束時間",
+                    "description": "排程時段結束的時間。"
+                },
+                "brightness": {
+                    "name": "亮度",
+                    "description": "此排程時段的亮度百分比（0–100）。"
+                },
+                "color_temp_kelvin": {
+                    "name": "色溫",
+                    "description": "色溫（克耳文）。僅適用於可調色溫的裝置。"
+                }
+            }
+        },
+        "clear_timer": {
+            "name": "清除定時器",
+            "description": "清除 ONF Light 裝置上一個或所有排程定時器槽位。",
+            "fields": {
+                "slot": {
+                    "name": "槽位",
+                    "description": "要清除的定時器槽位（1–5）。省略則清除所有槽位。"
+                }
+            }
+        }
     }
 }

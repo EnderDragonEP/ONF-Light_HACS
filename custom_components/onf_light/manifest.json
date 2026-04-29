@@ -1,15 +1,16 @@
 {
   "domain": "onf_light",
   "name": "ONF Light",
-  "codeowners": [],
+  "codeowners": ["@EnderDragonEP"],
   "config_flow": true,
   "dependencies": ["bluetooth_adapters"],
-  "documentation": "https://github.com/your-repo/onf_light",
+  "documentation": "https://github.com/EnderDragonEP/ONF-Light_HACS",
   "bluetooth": [
     { "local_name": "ONF*" },
     { "local_name": "FLAT NANO+*" },
     { "local_name": "MIST O+*" }
   ],
   "iot_class": "local_polling",
-  "version": "1.0.0"
+  "issue_tracker": "https://github.com/EnderDragonEP/ONF-Light_HACS/issues",
+  "version": "1.1.0"
 }

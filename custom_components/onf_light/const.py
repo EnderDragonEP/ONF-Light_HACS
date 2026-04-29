@@ -59,6 +59,25 @@ STATE_CONFIRM_RETRY_DELAY = 0.12  # Delay between confirmation retries
 # Polling
 UPDATE_INTERVAL_SECONDS = 10  # Poll interval while idle
 UNAVAILABLE_TRACK_FAILURES = 3  # Mark unavailable after N consecutive failures
+UNAVAILABLE_POLL_DIVISOR = 6  # Only poll every Nth interval when unavailable (~60 s)
+
+# Timer/schedule
+MAX_TIMERS = 5
+CONF_TIMERS = "timers"
+
+# Options
+CONF_POLL_INTERVAL = "poll_interval"
+CONF_IDLE_DISCONNECT = "idle_disconnect"
+CONF_TIME_SYNC_INTERVAL = "time_sync_interval"
+TIME_SYNC_INTERVAL_MINUTES = 1440  # 24 hours
+
+
+def kelvin_to_cct_internal(kelvin: int, device_type: int | None) -> int:
+	"""Convert Kelvin to the device's 0–100 CCT internal value (5-step granularity)."""
+	min_k, max_k = kelvin_range_for_type(device_type)
+	kelvin = max(min_k, min(max_k, kelvin))
+	internal = round((kelvin - min_k) / (max_k - min_k) * 100)
+	return round(internal / BRIGHTNESS_STEP_PERCENT) * BRIGHTNESS_STEP_PERCENT
 
 
 def resolve_device_type(name: str | None) -> int | None:

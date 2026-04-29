@@ -18,5 +18,137 @@
             "no_devices_found": "No ONF Light devices found. Make sure your light is powered on and in Bluetooth range.",
             "not_supported": "This device is not supported"
         }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Device Configuration",
+                "description": "Adjust connection settings and configure up to 5 automatic lighting schedules. Schedules are stored on the device and run from its internal clock, no active Bluetooth connection is needed during scheduled operation.",
+                "data": {
+                    "poll_interval": "State Poll Interval (Seconds)",
+                    "idle_disconnect": "BLE Idle Disconnect (Seconds)",
+                    "time_sync_interval": "Clock Sync Interval (Minutes)",
+                    "slot_1_enabled": "Timer Slot 1",
+                    "slot_1_start": "On Time",
+                    "slot_1_end": "Off Time",
+                    "slot_1_brightness": "Brightness",
+                    "slot_1_color_temp": "Color Temperature",
+                    "slot_2_enabled": "Timer Slot 2",
+                    "slot_2_start": "On Time",
+                    "slot_2_end": "Off Time",
+                    "slot_2_brightness": "Brightness",
+                    "slot_2_color_temp": "Color Temperature",
+                    "slot_3_enabled": "Timer Slot 3",
+                    "slot_3_start": "On Time",
+                    "slot_3_end": "Off Time",
+                    "slot_3_brightness": "Brightness",
+                    "slot_3_color_temp": "Color Temperature",
+                    "slot_4_enabled": "Timer Slot 4",
+                    "slot_4_start": "On Time",
+                    "slot_4_end": "Off Time",
+                    "slot_4_brightness": "Brightness",
+                    "slot_4_color_temp": "Color Temperature",
+                    "slot_5_enabled": "Timer Slot 5",
+                    "slot_5_start": "On Time",
+                    "slot_5_end": "Off Time",
+                    "slot_5_brightness": "Brightness",
+                    "slot_5_color_temp": "Color Temperature"
+                },
+                "data_description": {
+                    "poll_interval": "How often HA reads the device state in the background. Set to 0 to disable.",
+                    "idle_disconnect": "Seconds of inactivity before HA drops the BLE connection. 0 to drop immediately after each command, -1 to stay permanently connected.",
+                    "time_sync_interval": "How often HA automatically sync the device clock. Set to 0 to disable. Default is 1440 (24 hours).",
+                    "slot_1_enabled": "Enable this timer slot. The schedule is pushed to the device and runs from its internal clock.",
+                    "slot_1_start": "The time the light turns on to the scheduled brightness.",
+                    "slot_1_end": "The time the light turns off at the end of the scheduled period.",
+                    "slot_1_brightness": "Light level during the scheduled period.",
+                    "slot_1_color_temp": "Color temperature in Kelvin for the scheduled period. Ignored on brightness-only devices.",
+                    "slot_2_enabled": "Enable this timer slot. The schedule is pushed to the device and runs from its internal clock.",
+                    "slot_2_start": "The time the light turns on to the scheduled brightness.",
+                    "slot_2_end": "The time the light turns off at the end of the scheduled period.",
+                    "slot_2_brightness": "Light level during the scheduled period.",
+                    "slot_2_color_temp": "Color temperature in Kelvin for the scheduled period. Ignored on brightness-only devices.",
+                    "slot_3_enabled": "Enable this timer slot. The schedule is pushed to the device and runs from its internal clock.",
+                    "slot_3_start": "The time the light turns on to the scheduled brightness.",
+                    "slot_3_end": "The time the light turns off at the end of the scheduled period.",
+                    "slot_3_brightness": "Light level during the scheduled period.",
+                    "slot_3_color_temp": "Color temperature in Kelvin for the scheduled period. Ignored on brightness-only devices.",
+                    "slot_4_enabled": "Enable this timer slot. The schedule is pushed to the device and runs from its internal clock.",
+                    "slot_4_start": "The time the light turns on to the scheduled brightness.",
+                    "slot_4_end": "The time the light turns off at the end of the scheduled period.",
+                    "slot_4_brightness": "Light level during the scheduled period.",
+                    "slot_4_color_temp": "Color temperature in Kelvin for the scheduled period. Ignored on brightness-only devices.",
+                    "slot_5_enabled": "Enable this timer slot. The schedule is pushed to the device and runs from its internal clock.",
+                    "slot_5_start": "The time the light turns on to the scheduled brightness.",
+                    "slot_5_end": "The time the light turns off at the end of the scheduled period.",
+                    "slot_5_brightness": "Light level during the scheduled period.",
+                    "slot_5_color_temp": "Color temperature in Kelvin for the scheduled period. Ignored on brightness-only devices."
+                }
+            }
+        }
+    },
+    "entity": {
+        "button": {
+            "sync_time": {
+                "name": "Sync Device Clock"
+            }
+        },
+        "binary_sensor": {
+            "connected": {
+                "name": "Bluetooth Connection"
+            }
+        },
+        "sensor": {
+            "firmware_version": {
+                "name": "Firmware Version"
+            },
+            "signal_strength": {
+                "name": "Signal Strength"
+            },
+            "kelvin_range": {
+                "name": "Color Temperature Range"
+            },
+            "active_timers": {
+                "name": "Active Timers"
+            }
+        }
+    },
+    "services": {
+        "set_timer": {
+            "name": "Set Timer",
+            "description": "Set a scheduled timer slot on an ONF Light device.",
+            "fields": {
+                "slot": {
+                    "name": "Slot",
+                    "description": "Timer slot number (1–5)."
+                },
+                "start_time": {
+                    "name": "Start Time",
+                    "description": "Time when the light turns on to the scheduled brightness."
+                },
+                "end_time": {
+                    "name": "End Time",
+                    "description": "Time when the scheduled period ends."
+                },
+                "brightness": {
+                    "name": "Brightness",
+                    "description": "Brightness percentage for this scheduled period (0–100)."
+                },
+                "color_temp_kelvin": {
+                    "name": "Color Temperature",
+                    "description": "Color temperature in Kelvin. Only applies to tunable-white devices."
+                }
+            }
+        },
+        "clear_timer": {
+            "name": "Clear Timer",
+            "description": "Clear one or all scheduled timer slots on an ONF Light device.",
+            "fields": {
+                "slot": {
+                    "name": "Slot",
+                    "description": "Timer slot to clear (1–5). Omit to clear all slots."
+                }
+            }
+        }
     }
 }
