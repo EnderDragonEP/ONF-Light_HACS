@@ -24,7 +24,6 @@ from .const import (
     DEVICE_NAME_PREFIXES,
     DOMAIN,
     IDLE_DISCONNECT_SECONDS,
-    MAX_TIMERS,
     TIME_SYNC_INTERVAL_MINUTES,
     UPDATE_INTERVAL_SECONDS,
     is_brightness_only,
@@ -32,6 +31,7 @@ from .const import (
     kelvin_to_cct_internal,
     resolve_device_type,
 )
+from .helpers import default_kelvin, normalize_timer_list, parse_time
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -170,36 +170,42 @@ class ONFLightOptionsFlowHandler(OptionsFlow):
         brightness_only = is_brightness_only(device_type)
         min_k, max_k = kelvin_range_for_type(device_type)
 
-        raw = self.config_entry.options.get(CONF_TIMERS, [])
-        timers: list[dict] = list(raw[:MAX_TIMERS])
-        while len(timers) < MAX_TIMERS:
-            timers.append({"active": False})
+        timers = normalize_timer_list(self.config_entry.options.get(CONF_TIMERS, []))
 
         if user_input is not None:
             new_timers = self._parse_form(user_input, brightness_only, min_k, max_k, device_type)
-            poll_interval = int(user_input.get(CONF_POLL_INTERVAL, UPDATE_INTERVAL_SECONDS))
-            idle_disconnect = int(user_input.get(CONF_IDLE_DISCONNECT, IDLE_DISCONNECT_SECONDS))
-            time_sync_interval = int(user_input.get(CONF_TIME_SYNC_INTERVAL, TIME_SYNC_INTERVAL_MINUTES))
-            new_options = {
-                **self.config_entry.options,
-                CONF_TIMERS: new_timers,
-                CONF_POLL_INTERVAL: poll_interval,
-                CONF_IDLE_DISCONNECT: idle_disconnect,
-                CONF_TIME_SYNC_INTERVAL: time_sync_interval,
-            }
-
-            entry_data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id, {})
-            entity = entry_data.get("entity")
-            if entity is not None:
-                await entity.async_send_timers_to_device(new_timers)
-                entity.async_write_ha_state()
-
-            return self.async_create_entry(title="", data=new_options)
+            return self._save(user_input, new_timers)
 
         return self.async_show_form(
             step_id="init",
             data_schema=self._build_schema(timers, brightness_only, min_k, max_k),
         )
+
+    def _save(self, user_input: dict[str, Any], new_timers: list[dict]) -> ConfigFlowResult:
+        """Store the options and push the new schedule to the light."""
+        poll_interval = int(user_input.get(CONF_POLL_INTERVAL, UPDATE_INTERVAL_SECONDS))
+        idle_disconnect = int(user_input.get(CONF_IDLE_DISCONNECT, IDLE_DISCONNECT_SECONDS))
+        time_sync_interval = int(user_input.get(CONF_TIME_SYNC_INTERVAL, TIME_SYNC_INTERVAL_MINUTES))
+        new_options = {
+            **self.config_entry.options,
+            CONF_TIMERS: new_timers,
+            CONF_POLL_INTERVAL: poll_interval,
+            CONF_IDLE_DISCONNECT: idle_disconnect,
+            CONF_TIME_SYNC_INTERVAL: time_sync_interval,
+        }
+
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        entity = runtime_data.entity if runtime_data is not None else None
+        if entity is not None:
+            # Send in the background so the dialog closes even if the light
+            # is slow or out of range; a failed push is retried on reconnect.
+            self.config_entry.async_create_background_task(
+                self.hass,
+                entity.async_send_timers_to_device(new_timers),
+                f"{DOMAIN} options timer push",
+            )
+
+        return self.async_create_entry(title="", data=new_options)
 
     def _build_schema(
         self,
@@ -250,7 +256,7 @@ class ONFLightOptionsFlowHandler(OptionsFlow):
                 )
             ),
         }
-        mid_k = round((min_k + max_k) / 2)
+        mid_k = default_kelvin(self.config_entry.data.get(CONF_DEVICE_TYPE))
 
         for i, timer in enumerate(timers, start=1):
             active = timer.get("active", False)
@@ -315,10 +321,10 @@ class ONFLightOptionsFlowHandler(OptionsFlow):
             start: str = user_input.get(f"slot_{i}_start", "07:00:00")
             end: str = user_input.get(f"slot_{i}_end", "22:00:00")
             brightness = int(user_input.get(f"slot_{i}_brightness", 80))
-            start_hm = start[:5]
-            end_hm = end[:5]
-            sh, sm = int(start[:2]), int(start[3:5])
-            eh, em = int(end[:2]), int(end[3:5])
+            sh, sm = parse_time(start)
+            eh, em = parse_time(end)
+            start_hm = f"{sh:02d}:{sm:02d}"
+            end_hm = f"{eh:02d}:{em:02d}"
 
             timer: dict[str, Any] = {
                 "active": True,
@@ -331,8 +337,7 @@ class ONFLightOptionsFlowHandler(OptionsFlow):
                 "brightness": max(0, min(100, brightness)),
             }
             if not brightness_only:
-                mid_k = round((min_k + max_k) / 2)
-                k = int(user_input.get(f"slot_{i}_color_temp", mid_k))
+                k = int(user_input.get(f"slot_{i}_color_temp", default_kelvin(device_type)))
                 k = max(min_k, min(max_k, k))
                 timer["color_temp_kelvin"] = k
                 timer["cct_internal"] = kelvin_to_cct_internal(k, device_type)

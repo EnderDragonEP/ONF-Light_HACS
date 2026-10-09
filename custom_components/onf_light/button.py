@@ -4,20 +4,20 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS, EntityCategory
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .data import ONFLightConfigEntry
+from .entity import device_info_for_entry
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: ONFLightConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up ONF Light button from a config entry."""
@@ -32,23 +32,16 @@ class ONFLightSyncTimeButton(ButtonEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:timer-sync"
 
-    def __init__(self, entry: ConfigEntry) -> None:
+    def __init__(self, entry: ONFLightConfigEntry) -> None:
         """Initialize the sync time button."""
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_sync_time"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.data[CONF_ADDRESS])},
-        )
+        self._attr_device_info = device_info_for_entry(entry)
 
     async def async_press(self) -> None:
         """Sync the device RTC to current local time."""
-        client = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {}).get("client")
-        if client is None:
-            _LOGGER.warning("No BLE client available for time sync on %s", self._entry.title)
-            return
-        success = await client.sync_time()
-        _LOGGER.debug(
-            "Manual time sync for %s: %s",
-            self._entry.title,
-            "ok" if success else "failed",
-        )
+        if not await self._entry.runtime_data.client.sync_time():
+            raise HomeAssistantError(
+                f"Could not sync the clock of {self._entry.title}; the light is not reachable."
+            )
+        _LOGGER.debug("Manual time sync for %s: ok", self._entry.title)

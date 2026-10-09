@@ -10,24 +10,29 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime
 
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from .const import (
     BLE_RESPONSE_TIMEOUT,
-    BLE_TIMEOUT,
     CHAR_NOTIFY_UUID,
     CHAR_WRITE_UUID,
     COMMAND_RETRIES,
+    CONNECT_MAX_ATTEMPTS,
     IDLE_DISCONNECT_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _ConnectionFailedError(Exception):
+    """Raised when no connection could be made (establish_connection already retried)."""
 
 
 class ONFLightBLEClient:
@@ -75,9 +80,7 @@ class ONFLightBLEClient:
     def set_idle_disconnect_seconds(self, seconds: float) -> None:
         """Update the idle-disconnect timeout. -1 disables automatic disconnect."""
         self._idle_disconnect_seconds = seconds
-        if self._idle_disconnect_task is not None:
-            self._idle_disconnect_task.cancel()
-            self._idle_disconnect_task = None
+        self._cancel_idle_task()
         if seconds >= 0 and self._client is not None and self._client.is_connected:
             self._schedule_idle_disconnect()
 
@@ -146,9 +149,22 @@ class ONFLightBLEClient:
             )
 
         _LOGGER.debug("Connecting to %s", self._address)
-        client = BleakClient(ble_device, timeout=BLE_TIMEOUT)
-        await client.connect()
-        await client.start_notify(CHAR_NOTIFY_UUID, self._notification_handler)
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            self._address,
+            disconnected_callback=self._on_disconnected,
+            max_attempts=CONNECT_MAX_ATTEMPTS,
+        )
+        try:
+            await client.start_notify(CHAR_NOTIFY_UUID, self._notification_handler)
+        except (BleakError, TimeoutError, OSError):
+            # Don't leak a live link that we never stored.
+            try:
+                await client.disconnect()
+            except (BleakError, TimeoutError, OSError):
+                pass
+            raise
         self._client = client
         self._last_activity = time.monotonic()
         _LOGGER.debug("Connected to %s", self._address)
@@ -159,43 +175,68 @@ class ONFLightBLEClient:
 
         return client
 
+    def _on_disconnected(self, client: BleakClient) -> None:
+        """Handle a disconnect reported by the BLE stack (e.g. light went out of range)."""
+        if client is not self._client:
+            # Our own _do_disconnect already cleared the reference.
+            return
+        _LOGGER.debug("%s disconnected", self._address)
+        self._client = None
+        self._cancel_idle_task()
+        self._fire_connection_callbacks()
+
+    def _cancel_idle_task(self) -> None:
+        """Cancel the idle watchdog, unless it is the task calling us.
+
+        The watchdog itself calls _do_disconnect(); cancelling the running task
+        would abort that disconnect at its first await and leak the connection.
+        """
+        task = self._idle_disconnect_task
+        self._idle_disconnect_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
     def _schedule_idle_disconnect(self) -> None:
         """Schedule or reschedule the idle disconnect timer (no-op when disabled)."""
+        self._cancel_idle_task()
         if self._idle_disconnect_seconds < 0:
             return
-        if self._idle_disconnect_task is not None:
-            self._idle_disconnect_task.cancel()
         self._idle_disconnect_task = asyncio.create_task(
             self._idle_disconnect_loop()
         )
 
     async def _idle_disconnect_loop(self) -> None:
-        """Periodically check if the connection has been idle too long."""
-        try:
-            while True:
-                await asyncio.sleep(5.0)
+        """Disconnect once the connection has been idle for the configured time."""
+        while True:
+            if self._idle_disconnect_seconds < 0:
+                return
+            remaining = (
+                self._last_activity + self._idle_disconnect_seconds - time.monotonic()
+            )
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+                continue
+            # Take the lock so we never tear down a command that is in flight.
+            async with self._lock:
                 if self._client is None or not self._client.is_connected:
                     return
-                if self._idle_disconnect_seconds < 0:
-                    return
-                elapsed = time.monotonic() - self._last_activity
-                if elapsed >= self._idle_disconnect_seconds:
-                    _LOGGER.debug(
-                        "Idle timeout reached for %s, disconnecting", self._address
-                    )
-                    await self._do_disconnect()
-                    return
-        except asyncio.CancelledError:
-            pass
+                if (
+                    time.monotonic() - self._last_activity
+                    < self._idle_disconnect_seconds
+                ):
+                    continue  # A command ran while we waited for the lock.
+                _LOGGER.debug(
+                    "Idle timeout reached for %s, disconnecting", self._address
+                )
+                await self._do_disconnect()
+                return
 
     async def _do_disconnect(self) -> None:
-        """Disconnect and clean up."""
+        """Disconnect and clean up. Callers must hold the lock (or be tearing down)."""
         client = self._client
         had_connection = client is not None
         self._client = None
-        if self._idle_disconnect_task is not None:
-            self._idle_disconnect_task.cancel()
-            self._idle_disconnect_task = None
+        self._cancel_idle_task()
         if client is not None and client.is_connected:
             try:
                 await client.stop_notify(CHAR_NOTIFY_UUID)
@@ -225,7 +266,7 @@ class ONFLightBLEClient:
                     "Failed to connect to %s: %s", self._address, err
                 )
                 await self._do_disconnect()
-                return None
+                raise _ConnectionFailedError from err
 
             self._response_event.clear()
             self._response_data = b""
@@ -247,6 +288,7 @@ class ONFLightBLEClient:
                     await asyncio.wait_for(
                         self._response_event.wait(), timeout=BLE_RESPONSE_TIMEOUT
                     )
+                    self._last_activity = time.monotonic()
                     return self._response_data
                 except TimeoutError:
                     _LOGGER.warning(
@@ -259,9 +301,17 @@ class ONFLightBLEClient:
     async def _send_with_retry(
         self, data: bytes, wait_response: bool = False
     ) -> bytes | None:
-        """Send command with retries, reconnecting on failure."""
+        """Send command with retries, reconnecting on failure.
+
+        Connection failures are not retried here: establish_connection has
+        already retried with backoff, and stacking retries would make a call
+        to an unreachable light hang for minutes.
+        """
         for attempt in range(1, COMMAND_RETRIES + 1):
-            result = await self._send_command(data, wait_response)
+            try:
+                result = await self._send_command(data, wait_response)
+            except _ConnectionFailedError:
+                return None
             if result is not None:
                 return result
             _LOGGER.debug(
@@ -323,14 +373,36 @@ class ONFLightBLEClient:
                 pass
         return None
 
+    async def _send_acknowledged(self, payload: bytes) -> bool:
+        """Send a binary command and wait for the light's acknowledgement.
+
+        The official app sends the next clock or timer command only after the
+        light's notification for the previous one arrives. Waiting here also
+        stops a late acknowledgement from being mistaken for the reply to the
+        next query (e.g. an lx? poll).
+        """
+        response = await self._send_with_retry(payload, wait_response=True)
+        if response is None:
+            return False
+        if response[:1] != payload[:1]:
+            _LOGGER.debug(
+                "Unexpected acknowledgement from %s for 0x%02X: %s",
+                self._address,
+                payload[0],
+                response.hex(),
+            )
+        return True
+
     async def sync_time(self) -> bool:
         """Sync the device's internal RTC to the current local time.
 
-        Binary command A0: matches BLEManager.setTime() in the official app.
-        Month is 0-indexed per Java Calendar.MONTH convention.
-        0x5A is a fixed terminator byte (not a computed checksum).
+        Binary command A0: matches BLEManager.setTime() in the official app,
+        which sends it after every connect. Month is 0-indexed per Java
+        Calendar.MONTH convention. 0x5A is a fixed terminator byte (not a
+        computed checksum).
         """
-        now = datetime.now()
+        # HA's configured time zone, not the OS one (often UTC in containers).
+        now = dt_util.now()
         year = now.year
         payload = bytes([
             0xA0,
@@ -343,12 +415,16 @@ class ONFLightBLEClient:
             now.second,
             0x5A,
         ])
-        result = await self._send_with_retry(payload, wait_response=False)
-        return result is not None
+        return await self._send_acknowledged(payload)
 
-    # ── CCT timer protocol (for tunable-white devices) ──────────────────────
+    # ── Timer protocol ───────────────────────────────────────────────────────
+    #
+    # ONF Link 2.5.1 uses the same per-slot time command (B1-B5) for every model,
+    # followed by one A2 (brightness-only models) or A3 (CCT models) command with
+    # the levels for all five slots. The older A1 "chained durations" command
+    # (BLEManager.saveTimerTime) is no longer called by the app.
 
-    async def set_timer_cct_time(
+    async def set_timer_slot_time(
         self,
         slot: int,
         start_hour: int,
@@ -356,35 +432,33 @@ class ONFLightBLEClient:
         end_hour: int,
         end_minute: int,
     ) -> bool:
-        """Send the start/end time for one CCT timer slot (B0+slot protocol).
+        """Send the start/end time for one timer slot (B0+slot protocol).
 
-        Matches BLEManager.saveTimerTimeB() with active=true.
+        Matches BLEManager.saveTimerTimeB() for a slot that holds a timer.
         CRC = (cmd + 2 + startH + startM + endH + endM) % 256
         """
         cmd = 0xB0 + slot
         crc = (cmd + 2 + start_hour + start_minute + end_hour + end_minute) % 256
         payload = bytes([cmd, 0x01, 0x01, start_hour, start_minute, end_hour, end_minute, crc])
-        result = await self._send_with_retry(payload, wait_response=False)
-        return result is not None
+        return await self._send_acknowledged(payload)
 
-    async def clear_timer_cct_time(self, slot: int) -> bool:
-        """Clear one CCT timer slot (marks it inactive on the device).
+    async def clear_timer_slot(self, slot: int) -> bool:
+        """Mark one timer slot inactive on the device.
 
-        Matches BLEManager.saveTimerTimeB() with active=false.
+        Matches BLEManager.saveTimerTimeB() for a slot past the end of the list.
         CRC = (cmd + 1) % 256
         """
         cmd = 0xB0 + slot
         crc = (cmd + 1) % 256
         payload = bytes([cmd, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, crc])
-        result = await self._send_with_retry(payload, wait_response=False)
-        return result is not None
+        return await self._send_acknowledged(payload)
 
     async def set_timers_cct_brightness(
         self,
         cct_values: list[int],
         br_values: list[int],
     ) -> bool:
-        """Send brightness and CCT for all 5 timer slots at once (A3 protocol).
+        """Send CCT and brightness for all 5 timer slots (A3, CCT models).
 
         Matches BLEManager.saveTimerBrightnessB().
         cct_values: 0-100 device units (pre-converted from Kelvin by caller).
@@ -393,36 +467,10 @@ class ONFLightBLEClient:
         """
         crc = (0xA3 + 2 + sum(cct_values) + sum(br_values)) % 256
         payload = bytes([0xA3, 0x01, 0x01] + cct_values + br_values + [crc])
-        result = await self._send_with_retry(payload, wait_response=False)
-        return result is not None
+        return await self._send_acknowledged(payload)
 
-    # ── Simple (brightness-only) timer protocol ──────────────────────────────
-
-    async def set_timers_simple_time(
-        self,
-        start_hour: int,
-        start_minute: int,
-        durations: list[int],
-    ) -> bool:
-        """Send all 5 timer time slots for a brightness-only device (A1 protocol).
-
-        Matches BLEManager.saveTimerTime().
-        durations: 5 chained durations in minutes (each as 2-byte big-endian).
-          dur[0] = minutes from anchor start to end of timer 0.
-          dur[N] = minutes from end of timer N-1 to end of timer N (gap).
-        CRC = (0xA1 + 6 + startH + startM + sum_of_duration_bytes) % 256
-        """
-        dur_bytes: list[int] = []
-        for d in durations:
-            dur_bytes.extend([(d >> 8) & 0xFF, d & 0xFF])
-        byte_sum = start_hour + start_minute + sum(dur_bytes)
-        crc = (0xA1 + 6 + byte_sum) % 256
-        payload = bytes([0xA1, 0x01, 0x05, start_hour, start_minute] + dur_bytes + [crc])
-        result = await self._send_with_retry(payload, wait_response=False)
-        return result is not None
-
-    async def set_timers_simple_brightness(self, br_values: list[int]) -> bool:
-        """Send brightness for all 5 timer slots for a brightness-only device (A2 protocol).
+    async def set_timers_brightness(self, br_values: list[int]) -> bool:
+        """Send brightness for all 5 timer slots (A2, brightness-only models).
 
         Matches BLEManager.saveTimerBrightness().
         br_values: 0-100 percent, one per slot.
@@ -430,5 +478,4 @@ class ONFLightBLEClient:
         """
         crc = (0xA2 + 2 + sum(br_values)) % 256
         payload = bytes([0xA2, 0x01, 0x01] + br_values + [crc])
-        result = await self._send_with_retry(payload, wait_response=False)
-        return result is not None
+        return await self._send_acknowledged(payload)

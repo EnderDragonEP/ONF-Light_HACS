@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.bluetooth import async_last_service_info
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -14,10 +13,12 @@ from .ble_client import ONFLightBLEClient
 from .const import (
     CONF_DEVICE_TYPE,
     CONF_TIMERS,
-    DOMAIN,
     is_brightness_only,
     kelvin_range_for_type,
 )
+
+if TYPE_CHECKING:
+    from .data import ONFLightConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class ONFLightDiagnosticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(
         self,
         hass: HomeAssistant,
-        entry: ConfigEntry,
+        entry: ONFLightConfigEntry,
         client: ONFLightBLEClient,
     ) -> None:
         """Initialize the coordinator."""
@@ -47,8 +48,7 @@ class ONFLightDiagnosticCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Aggregate diagnostic snapshot from in-memory sources (never raises)."""
         address: str = self._entry.data.get("address", "")
         service_info = async_last_service_info(self.hass, address, connectable=True)
-        entry_store = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
-        diag: dict[str, Any] = entry_store.get("diagnostics", {})
+        diag: dict[str, Any] = self._entry.runtime_data.diagnostics
         timers: list[dict] = self._entry.options.get(CONF_TIMERS, [])
         device_type = self._entry.data.get(CONF_DEVICE_TYPE)
 

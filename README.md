@@ -64,7 +64,7 @@ Disabled-by-default entities can be enabled individually in the entity registry.
 ### HA Services
 
 | Service | Description |
-|---|---|
+| --- | --- |
 | `onf_light.set_timer` | Set a timer slot (slot 1–5, start time, end time, brightness, optional color temperature) |
 | `onf_light.clear_timer` | Clear one slot by number, or omit slot to clear all |
 
@@ -99,9 +99,22 @@ Disabled-by-default entities can be enabled individually in the entity registry.
 
 Standard HA light controls. Brightness uses the 0–255 HA scale. Color temperature is exposed as `color_temp_kelvin` and mapped to the device's internal step granularity automatically.
 
+The Kelvin range matches what the official ONF Link app shows for each model:
+
+| Models | Range |
+| --- | --- |
+| Blue-white: ONF-1S, ONF-1P, ONF-1S+, ONF-1P+, ONF-3S+, ONF-3P+, FLAT NANO+ BW | 6500 K (white) – 20500 K (blue) |
+| MIST O+ BW | 7000 K (white) – 21000 K (blue) |
+| MIST O+ YW | 2700 K – 7000 K |
+| Other tunable-white models | 3000 K – 6500 K |
+
 ### Timer schedules
 
 Open the integration's gear icon (⚙) in **Settings → Integrations** to configure up to 5 timer slots. Each slot has an on time, off time, brightness, and (for CCT devices) a color temperature. Schedules are pushed to the device and run from its internal clock — they continue to operate even when HA is offline.
+
+Like the official app, the integration writes enabled slots to the light in order with no gaps. For example, if only slots 2 and 4 are enabled in HA, they are stored as the light's first and second timers, so the app can show them.
+
+If the light is out of range when you save a schedule, the schedule is kept and sent automatically the next time HA reaches the light.
 
 ---
 

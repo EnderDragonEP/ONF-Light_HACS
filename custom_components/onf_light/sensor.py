@@ -8,24 +8,23 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS, EntityCategory, SIGNAL_STRENGTH_DECIBELS_MILLIWATT
+from homeassistant.const import EntityCategory, SIGNAL_STRENGTH_DECIBELS_MILLIWATT
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_MODEL, DOMAIN
 from .coordinator import ONFLightDiagnosticCoordinator
+from .data import ONFLightConfigEntry
+from .entity import device_info_for_entry
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: ONFLightConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up ONF Light diagnostic sensors from a config entry."""
-    coordinator: ONFLightDiagnosticCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator = entry.runtime_data.coordinator
     async_add_entities([
         ONFLightFirmwareSensor(coordinator, entry),
         ONFLightSignalStrengthSensor(coordinator, entry),
@@ -40,20 +39,11 @@ class _ONFLightDiagnosticSensor(CoordinatorEntity[ONFLightDiagnosticCoordinator]
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ONFLightConfigEntry) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._entry = entry
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Attach to the shared ONF Light device."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.data[CONF_ADDRESS])},
-            name=self._entry.title,
-            manufacturer="ONF",
-            model=self._entry.data.get(CONF_MODEL, self._entry.title),
-        )
+        self._attr_device_info = device_info_for_entry(entry)
 
 
 class ONFLightFirmwareSensor(_ONFLightDiagnosticSensor):
@@ -63,7 +53,7 @@ class ONFLightFirmwareSensor(_ONFLightDiagnosticSensor):
     _attr_icon = "mdi:chip"
     _attr_entity_registry_enabled_default = False
 
-    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ONFLightConfigEntry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_firmware_version"
 
@@ -84,7 +74,7 @@ class ONFLightSignalStrengthSensor(_ONFLightDiagnosticSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_registry_enabled_default = False
 
-    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ONFLightConfigEntry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_rssi"
 
@@ -103,7 +93,7 @@ class ONFLightKelvinRangeSensor(_ONFLightDiagnosticSensor):
     _attr_icon = "mdi:thermometer-lines"
     _attr_entity_registry_enabled_default = False
 
-    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ONFLightConfigEntry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_kelvin_range"
 
@@ -125,7 +115,7 @@ class ONFLightActiveTimersSensor(_ONFLightDiagnosticSensor):
     _attr_icon = "mdi:timer-outline"
     _attr_native_unit_of_measurement = "slots"
 
-    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ONFLightConfigEntry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_active_timers"
 

@@ -43,7 +43,7 @@ set_timer:
       selector:
         number:
           min: 2700
-          max: 7000
+          max: 21000
           unit_of_measurement: K
 
 clear_timer:

@@ -5,24 +5,23 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS, EntityCategory
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_MODEL, DOMAIN
 from .coordinator import ONFLightDiagnosticCoordinator
+from .data import ONFLightConfigEntry
+from .entity import device_info_for_entry
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: ONFLightConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up ONF Light binary sensors from a config entry."""
-    coordinator: ONFLightDiagnosticCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator = entry.runtime_data.coordinator
     async_add_entities([ONFLightConnectedSensor(coordinator, entry)])
 
 
@@ -40,27 +39,18 @@ class ONFLightConnectedSensor(
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: ONFLightDiagnosticCoordinator, entry: ONFLightConfigEntry) -> None:
         """Initialize the connected sensor."""
         super().__init__(coordinator)
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_connected"
+        self._attr_device_info = device_info_for_entry(entry)
         self._connection_callback = self._on_connection_changed
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Attach to the shared ONF Light device."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.data[CONF_ADDRESS])},
-            name=self._entry.title,
-            manufacturer="ONF",
-            model=self._entry.data.get(CONF_MODEL, self._entry.title),
-        )
 
     async def async_added_to_hass(self) -> None:
         """Register BLE connection callback for real-time updates."""
         await super().async_added_to_hass()
-        client = self.hass.data[DOMAIN][self._entry.entry_id]["client"]
+        client = self._entry.runtime_data.client
         client.register_connection_callback(self._connection_callback)
         self.async_on_remove(
             lambda: client.unregister_connection_callback(self._connection_callback)
