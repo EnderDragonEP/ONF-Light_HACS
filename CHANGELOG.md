@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+### Fixes
+
+- **Saving the Device Configuration dialog works again.** In 1.2.0, pressing Submit always showed "Unknown error occurred" and nothing was saved. This affected the poll interval, idle disconnect and clock sync settings, as well as the timer slots. Settings you saved before 1.2.0 were not changed.
+
 ## 1.2.0
 
 This release compares the integration with the official ONF Link app (version 2.5.1) and makes it behave the same way. It also fixes several Bluetooth connection problems.
