@@ -24,6 +24,7 @@ from .const import (
     DEVICE_NAME_PREFIXES,
     DOMAIN,
     IDLE_DISCONNECT_SECONDS,
+    MAX_TIMERS,
     TIME_SYNC_INTERVAL_MINUTES,
     UPDATE_INTERVAL_SECONDS,
     is_brightness_only,
